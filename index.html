@@ -183,7 +183,6 @@
     [data-theme="dark"] .tab{ background: rgba(13,18,29,.60); }
     .tab:active{ transform: translateY(1px); }
 
-    /* Active highlight (fix) */
     .tab.active{
       background: linear-gradient(180deg, rgba(74,163,255,.26), rgba(74,163,255,.10));
       border-color: rgba(74,163,255,.45);
@@ -432,18 +431,11 @@
     let onlyPending = (localStorage.getItem("cal7_only_pending") === "1");
     function syncPendingUI(){ pendingToggle.classList.toggle("on", onlyPending); }
     syncPendingUI();
-    pendingToggle.onclick = ()=>{
-      onlyPending = !onlyPending;
-      localStorage.setItem("cal7_only_pending", onlyPending ? "1" : "0");
-      syncPendingUI();
-      renderTabs();
-      render();
-    };
 
     // UI state
     let allRows = [];
     let ops = [];
-    let activeOp = "ALL";
+    let activeOp = "ALL"; // "ALL" | "DONE" | operator code
     let q = "";
 
     const tabsEl = document.getElementById("tabs");
@@ -470,15 +462,29 @@
       return hay.includes(q.toLowerCase());
     }
 
+    function isDoneTab(){ return activeOp === "DONE"; }
+
     function matchPending(row){
+      // En "Cumplidas" no aplica pending filter
+      if(isDoneTab()) return true;
       if(!onlyPending) return true;
       const st = row.status || "pending";
       return st === "pending";
     }
 
+    function matchDone(row){
+      if(!isDoneTab()) return true;
+      return (row.status === "yes");
+    }
+
     function currentViewRows(){
       return allRows
-        .filter(r => activeOp === "ALL" ? true : r.op === activeOp)
+        .filter(r => {
+          if(activeOp === "ALL") return true;
+          if(activeOp === "DONE") return true; // el filtro lo hace matchDone()
+          return r.op === activeOp;
+        })
+        .filter(matchDone)
         .filter(matchQ)
         .filter(matchPending);
     }
@@ -492,19 +498,30 @@
         if(showBadge){
           el.innerHTML = `${label} <span class="badge">${count}</span>`;
         }else{
-          el.textContent = label; // clean
+          el.textContent = label;
         }
         el.onclick = ()=>{
           activeOp = key;
-          renderTabs(); // ✅ fixes highlight staying on first tab
+          renderTabs();
           render();
+          // si entras a Cumplidas, apaga visualmente el toggle de pendientes (no aplica)
+          if(isDoneTab()){
+            pendingToggle.classList.remove("on");
+          }else{
+            syncPendingUI();
+          }
         };
         tabsEl.appendChild(el);
       };
 
-      // "Todos" without badge for a clean look
+      // "Todos" limpio sin badge
       makeTab("ALL","Todos", 0, false);
 
+      // ✅ Nueva pestaña Cumplidas
+      const doneCount = allRows.filter(r => r.status === "yes").length;
+      makeTab("DONE","Cumplidas", doneCount, true);
+
+      // Operadores
       for(const op of ops){
         const count = allRows.filter(r=>r.op===op).length;
         makeTab(op, op, count, true);
@@ -525,6 +542,10 @@
     function render(){
       const rows = currentViewRows();
       renderSummary(rows);
+
+      // Ajuste: si estamos en Cumplidas, deshabilita el toggle (sin romper UI)
+      pendingToggle.style.opacity = isDoneTab() ? "0.55" : "1";
+      pendingToggle.style.pointerEvents = isDoneTab() ? "none" : "auto";
 
       listEl.innerHTML = "";
       if(rows.length===0){
@@ -658,7 +679,11 @@
 
         const r = allRows.find(x=>x.id===id);
         if(r){ r.status=status; r.updated_at=new Date().toISOString(); }
+
         toast(status==="yes" ? "✅ Marcado como cumplió" : "❌ Marcado como no");
+
+        // refresca tabs (porque cambia el conteo de Cumplidas)
+        renderTabs();
         render();
       }catch(err){
         console.error(err);
@@ -787,9 +812,12 @@
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
 
-      const op = (activeOp === "ALL") ? "todos" : activeOp.toLowerCase();
-      const pend = onlyPending ? "_pendientes" : "";
-      const filename = `calibraciones7_${op}${pend}.csv`;
+      let tag = "todos";
+      if(activeOp === "DONE") tag = "cumplidas";
+      else if(activeOp !== "ALL") tag = activeOp.toLowerCase();
+
+      const pend = (!isDoneTab() && onlyPending) ? "_pendientes" : "";
+      const filename = `calibraciones7_${tag}${pend}.csv`;
 
       const a = document.createElement("a");
       a.href = url;
@@ -816,9 +844,21 @@
       render();
     });
 
+    // Pending toggle click (deshabilitado en Cumplidas desde render())
+    pendingToggle.onclick = ()=>{
+      if(isDoneTab()) return;
+      onlyPending = !onlyPending;
+      localStorage.setItem("cal7_only_pending", onlyPending ? "1" : "0");
+      syncPendingUI();
+      renderTabs();
+      render();
+    };
+
     // Init
     await ping();
     await loadPLs();
+    renderTabs();
+    render();
   </script>
 </body>
 </html>
