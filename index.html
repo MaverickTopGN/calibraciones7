@@ -23,7 +23,6 @@
       --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
     }
 
-    /* Executive dark mode */
     [data-theme="dark"]{
       --bg: #060A12;
       --card: rgba(13,18,29,.88);
@@ -47,9 +46,7 @@
 
     .wrap{ max-width:1180px; margin:0 auto; padding:18px 14px 34px; padding-bottom: calc(34px + env(safe-area-inset-bottom)); }
 
-    .top{
-      display:flex; gap:12px; align-items:center; justify-content:space-between; margin:4px 0 14px;
-    }
+    .top{ display:flex; gap:12px; align-items:center; justify-content:space-between; margin:4px 0 14px; }
     h1{ margin:0; font-size:18px; letter-spacing:.2px; }
 
     .pill{
@@ -289,11 +286,7 @@
 
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace; }
 
-    .mini{
-      font-size:12px;
-      color: var(--muted);
-      padding: 12px 14px;
-    }
+    .mini{ font-size:12px; color: var(--muted); padding: 12px 14px; }
 
     .summary{
       padding:14px;
@@ -319,6 +312,20 @@
       flex-wrap:wrap;
       justify-content:flex-end;
     }
+
+    /* Group headers for Cumplidas */
+    .groupHeader{
+      padding:12px 14px;
+      border-top:1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      background: rgba(255,255,255,.55);
+      font-weight:950;
+    }
+    [data-theme="dark"] .groupHeader{ background: rgba(13,18,29,.55); }
+    .groupHeader small{ color: var(--muted); font-weight:900; }
   </style>
 </head>
 
@@ -378,7 +385,6 @@
 
   <div class="toast" id="toast"></div>
 
-  <!-- config.js DEBE ir antes del módulo -->
   <script src="./config.js"></script>
 
   <script type="module">
@@ -431,11 +437,19 @@
     let onlyPending = (localStorage.getItem("cal7_only_pending") === "1");
     function syncPendingUI(){ pendingToggle.classList.toggle("on", onlyPending); }
     syncPendingUI();
+    pendingToggle.onclick = ()=>{
+      onlyPending = !onlyPending;
+      localStorage.setItem("cal7_only_pending", onlyPending ? "1" : "0");
+      syncPendingUI();
+      renderTabs();
+      render();
+    };
 
     // UI state
     let allRows = [];
     let ops = [];
-    let activeOp = "ALL"; // "ALL" | "DONE" | operator code
+    let activeView = "ALL"; // "ALL" | "DONE" | "OP"
+    let activeOp = "ALL";   // operator when activeView === "OP"
     let q = "";
 
     const tabsEl = document.getElementById("tabs");
@@ -446,12 +460,36 @@
     const sYes   = document.getElementById("sYes");
     const sNo    = document.getElementById("sNo");
 
-    function fmtDate(iso){
+    function fmtDateTime(iso){
       try{
         const d = new Date(iso);
         return d.toLocaleString("es-MX", { year:"numeric", month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit" });
       }catch{ return ""; }
     }
+
+    function fmtDateOnly(iso){
+      try{
+        const d = new Date(iso);
+        // e.g. "3 de febrero"
+        return d.toLocaleDateString("es-MX", { day:"numeric", month:"long" });
+      }catch{
+        return "Sin fecha";
+      }
+    }
+
+    function dayKey(iso){
+      try{
+        const d = new Date(iso);
+        // local day key YYYY-MM-DD
+        const y = d.getFullYear();
+        const m = String(d.getMonth()+1).padStart(2,"0");
+        const da = String(d.getDate()).padStart(2,"0");
+        return `${y}-${m}-${da}`;
+      }catch{
+        return "unknown";
+      }
+    }
+
     function sanitizeFilename(name){
       return String(name || "archivo").replace(/[^a-zA-Z0-9._-]+/g,"_");
     }
@@ -462,69 +500,76 @@
       return hay.includes(q.toLowerCase());
     }
 
-    function isDoneTab(){ return activeOp === "DONE"; }
-
     function matchPending(row){
-      // En "Cumplidas" no aplica pending filter
-      if(isDoneTab()) return true;
       if(!onlyPending) return true;
       const st = row.status || "pending";
       return st === "pending";
     }
 
-    function matchDone(row){
-      if(!isDoneTab()) return true;
-      return (row.status === "yes");
-    }
-
     function currentViewRows(){
-      return allRows
-        .filter(r => {
-          if(activeOp === "ALL") return true;
-          if(activeOp === "DONE") return true; // el filtro lo hace matchDone()
-          return r.op === activeOp;
-        })
-        .filter(matchDone)
-        .filter(matchQ)
-        .filter(matchPending);
+      let rows = allRows;
+
+      if(activeView === "DONE"){
+        rows = rows.filter(r => (r.status || "pending") === "yes");
+      } else if(activeView === "OP"){
+        rows = rows.filter(r => r.op === activeOp);
+      } // ALL: no filter
+
+      rows = rows.filter(matchQ);
+
+      // Solo pendientes NO aplica en Cumplidas (se queda limpio y lógico)
+      if(activeView !== "DONE"){
+        rows = rows.filter(matchPending);
+      }
+
+      return rows;
     }
 
     function renderTabs(){
       tabsEl.innerHTML = "";
 
-      const makeTab = (key,label,count,showBadge=true)=>{
+      const makeTab = (key,label,count,opts={})=>{
+        const { showBadge=true } = opts;
         const el = document.createElement("button");
-        el.className = "tab" + (activeOp===key ? " active" : "");
+        const isActive =
+          (key === "ALL"  && activeView === "ALL") ||
+          (key === "DONE" && activeView === "DONE") ||
+          (key === "OP"   && activeView === "OP" && label === activeOp);
+
+        el.className = "tab" + (isActive ? " active" : "");
         if(showBadge){
           el.innerHTML = `${label} <span class="badge">${count}</span>`;
         }else{
           el.textContent = label;
         }
         el.onclick = ()=>{
-          activeOp = key;
+          if(key === "ALL"){
+            activeView = "ALL";
+            activeOp = "ALL";
+          } else if(key === "DONE"){
+            activeView = "DONE";
+            activeOp = "ALL";
+          } else if(key === "OP"){
+            activeView = "OP";
+            activeOp = label;
+          }
           renderTabs();
           render();
-          // si entras a Cumplidas, apaga visualmente el toggle de pendientes (no aplica)
-          if(isDoneTab()){
-            pendingToggle.classList.remove("on");
-          }else{
-            syncPendingUI();
-          }
         };
         tabsEl.appendChild(el);
       };
 
-      // "Todos" limpio sin badge
-      makeTab("ALL","Todos", 0, false);
+      // Todos limpio sin badge
+      makeTab("ALL","Todos", 0, { showBadge:false });
 
-      // ✅ Nueva pestaña Cumplidas
-      const doneCount = allRows.filter(r => r.status === "yes").length;
-      makeTab("DONE","Cumplidas", doneCount, true);
+      // Cumplidas con badge
+      const doneCount = allRows.filter(r => (r.status || "pending") === "yes").length;
+      makeTab("DONE","Cumplidas", doneCount, { showBadge:true });
 
       // Operadores
       for(const op of ops){
         const count = allRows.filter(r=>r.op===op).length;
-        makeTab(op, op, count, true);
+        makeTab("OP", op, count, { showBadge:true });
       }
     }
 
@@ -539,90 +584,139 @@
       sNo.textContent    = no;
     }
 
+    function renderEmpty(){
+      const li = document.createElement("li");
+      li.className="row";
+      li.innerHTML = '<div class="meta"><div class="pl">Sin resultados</div><div class="rs">Cambia filtro o revisa búsqueda.</div></div><div class="right"></div>';
+      listEl.appendChild(li);
+    }
+
     function render(){
       const rows = currentViewRows();
       renderSummary(rows);
 
-      // Ajuste: si estamos en Cumplidas, deshabilita el toggle (sin romper UI)
-      pendingToggle.style.opacity = isDoneTab() ? "0.55" : "1";
-      pendingToggle.style.pointerEvents = isDoneTab() ? "none" : "auto";
-
       listEl.innerHTML = "";
       if(rows.length===0){
-        const li = document.createElement("li");
-        li.className="row";
-        li.innerHTML = '<div class="meta"><div class="pl">Sin resultados</div><div class="rs">Cambia filtro o revisa búsqueda.</div></div><div class="right"></div>';
-        listEl.appendChild(li);
+        renderEmpty();
         return;
       }
 
-      for(const row of rows){
-        const li = document.createElement("li");
-        li.className = "row";
-        li.dataset.id = row.id;
-
-        li.innerHTML = `
-          <div class="meta">
-            <div class="pl mono">${row.pl}</div>
-            <div class="rs">${row.razon_social || ""}</div>
-            <div class="loc">${row.estado || ""}${row.municipio ? " · " + row.municipio : ""} <span class="badge">${row.op}</span></div>
-          </div>
-          <div class="right">
-            <button class="chip neutral" data-act="toggleFiles">📎 Archivos</button>
-            <button class="chip good" data-act="setYes" title="Cumplió">✅</button>
-            <button class="chip bad" data-act="setNo" title="No cumplió">❌</button>
-          </div>
-        `;
-
-        const files = document.createElement("div");
-        files.className="files";
-        files.innerHTML = `
-          <div class="bar">
-            <div class="hint">Archivos de esta PL</div>
-            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-              <label class="btn small" style="cursor:pointer;">
-                ⬆️ Subir
-                <input type="file" multiple style="display:none" />
-              </label>
-              <button class="btn small" data-act="reloadFiles">↻ Ver</button>
-            </div>
-          </div>
-          <ul></ul>
-        `;
-
-        li.appendChild(files);
-        listEl.appendChild(li);
+      if(activeView === "DONE"){
+        renderDoneByDate(rows);
+        return;
       }
 
-      // attach events
-      listEl.querySelectorAll(".row").forEach(rowEl=>{
-        const id = rowEl.dataset.id;
-        const toggleBtn = rowEl.querySelector('[data-act="toggleFiles"]');
-        const yesBtn = rowEl.querySelector('[data-act="setYes"]');
-        const noBtn = rowEl.querySelector('[data-act="setNo"]');
-        const filesEl = rowEl.querySelector(".files");
-        const fileInput = rowEl.querySelector('input[type="file"]');
-        const reloadBtn = rowEl.querySelector('[data-act="reloadFiles"]');
+      // Default render (ALL / OP)
+      for(const row of rows){
+        listEl.appendChild(renderRow(row, { autoOpenFiles:false }));
+      }
+    }
 
-        toggleBtn.onclick = async ()=>{
-          filesEl.classList.toggle("open");
-          if(filesEl.classList.contains("open")){
-            await loadFiles(id, filesEl);
-          }
-        };
-        reloadBtn.onclick = ()=> loadFiles(id, filesEl);
+    function renderRow(row, { autoOpenFiles=false, completionLine="" } = {}){
+      const li = document.createElement("li");
+      li.className = "row";
+      li.dataset.id = row.id;
 
-        yesBtn.onclick = ()=> setStatus(id, "yes");
-        noBtn.onclick  = ()=> setStatus(id, "no");
+      li.innerHTML = `
+        <div class="meta">
+          <div class="pl mono">${row.pl}</div>
+          <div class="rs">${row.razon_social || ""}</div>
+          <div class="loc">
+            ${row.estado || ""}${row.municipio ? " · " + row.municipio : ""} <span class="badge">${row.op}</span>
+            ${completionLine ? `<div style="margin-top:4px; font-size:11px; color:var(--muted);">${completionLine}</div>` : ""}
+          </div>
+        </div>
+        <div class="right">
+          <button class="chip neutral" data-act="toggleFiles">📎 Archivos</button>
+          <button class="chip good" data-act="setYes" title="Cumplió">✅</button>
+          <button class="chip bad" data-act="setNo" title="No cumplió">❌</button>
+        </div>
+      `;
 
-        fileInput.onchange = async (e)=>{
-          const files = Array.from(e.target.files || []);
-          if(!files.length) return;
-          await uploadFiles(id, files);
-          e.target.value = "";
-          await loadFiles(id, filesEl);
-        };
+      const files = document.createElement("div");
+      files.className="files" + (autoOpenFiles ? " open" : "");
+      files.innerHTML = `
+        <div class="bar">
+          <div class="hint">Archivos de esta PL</div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+            <label class="btn small" style="cursor:pointer;">
+              ⬆️ Subir
+              <input type="file" multiple style="display:none" />
+            </label>
+            <button class="btn small" data-act="reloadFiles">↻ Ver</button>
+          </div>
+        </div>
+        <ul></ul>
+      `;
+
+      li.appendChild(files);
+
+      const id = row.id;
+      const toggleBtn = li.querySelector('[data-act="toggleFiles"]');
+      const yesBtn = li.querySelector('[data-act="setYes"]');
+      const noBtn = li.querySelector('[data-act="setNo"]');
+      const fileInput = li.querySelector('input[type="file"]');
+      const reloadBtn = li.querySelector('[data-act="reloadFiles"]');
+
+      toggleBtn.onclick = async ()=>{
+        files.classList.toggle("open");
+        if(files.classList.contains("open")){
+          await loadFiles(id, files);
+        }
+      };
+      reloadBtn.onclick = ()=> loadFiles(id, files);
+
+      yesBtn.onclick = ()=> setStatus(id, "yes");
+      noBtn.onclick  = ()=> setStatus(id, "no");
+
+      fileInput.onchange = async (e)=>{
+        const f = Array.from(e.target.files || []);
+        if(!f.length) return;
+        await uploadFiles(id, f);
+        e.target.value = "";
+        await loadFiles(id, files);
+      };
+
+      if(autoOpenFiles){
+        // load files automatically for DONE view
+        loadFiles(id, files);
+      }
+
+      return li;
+    }
+
+    // ✅ NEW: Cumplidas grouped by completion date (updated_at)
+    function renderDoneByDate(doneRows){
+      // Sort by updated_at desc (most recent first)
+      const rows = [...doneRows].sort((a,b)=>{
+        const ta = new Date(a.updated_at || a.created_at || 0).getTime();
+        const tb = new Date(b.updated_at || b.created_at || 0).getTime();
+        return tb - ta;
       });
+
+      // Group by day key
+      const groups = new Map();
+      for(const r of rows){
+        const iso = r.updated_at || r.created_at || null;
+        const k = dayKey(iso);
+        if(!groups.has(k)) groups.set(k, { label: fmtDateOnly(iso), rows: [] });
+        groups.get(k).rows.push(r);
+      }
+
+      // Render groups in order they appeared (already sorted)
+      for(const [k, g] of groups.entries()){
+        const header = document.createElement("li");
+        header.className = "groupHeader";
+        header.innerHTML = `<div>${g.label}</div><small>${g.rows.length} cumplidas</small>`;
+        listEl.appendChild(header);
+
+        for(const r of g.rows){
+          const completionLine = `Cumplida: ${fmtDateTime(r.updated_at || r.created_at)}`;
+          // Auto-open files and show them in DONE
+          const item = renderRow(r, { autoOpenFiles:true, completionLine });
+          listEl.appendChild(item);
+        }
+      }
     }
 
     async function ping(){
@@ -637,7 +731,6 @@
       }
     }
 
-    // ✅ Load ALL rows with pagination (fix 1000 cap)
     async function loadPLs(){
       let all = [];
       let from = 0;
@@ -647,7 +740,7 @@
         const to = from + pageSize - 1;
         const { data, error } = await supabase
           .from("pls")
-          .select("id, pl, op, razon_social, estado, municipio, status, updated_at")
+          .select("id, pl, op, razon_social, estado, municipio, status, updated_at, created_at")
           .order("op", { ascending:true })
           .order("pl", { ascending:true })
           .range(from, to);
@@ -679,11 +772,8 @@
 
         const r = allRows.find(x=>x.id===id);
         if(r){ r.status=status; r.updated_at=new Date().toISOString(); }
-
         toast(status==="yes" ? "✅ Marcado como cumplió" : "❌ Marcado como no");
-
-        // refresca tabs (porque cambia el conteo de Cumplidas)
-        renderTabs();
+        renderTabs(); // counts update (Cumplidas badge)
         render();
       }catch(err){
         console.error(err);
@@ -723,7 +813,7 @@
         li.innerHTML = `
           <div class="name">
             <b title="${f.filename}">${f.filename}</b>
-            <span>${(f.size||0).toLocaleString("es-MX")} bytes · ${fmtDate(f.created_at)}</span>
+            <span>${(f.size||0).toLocaleString("es-MX")} bytes · ${fmtDateTime(f.created_at)}</span>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
             <a class="btn small" href="${url}" target="_blank" rel="noopener">Abrir</a>
@@ -793,9 +883,9 @@
       }
     }
 
-    // Export CSV (operator / current view)
+    // Export CSV (current view)
     function toCSV(rows){
-      const cols = ["pl","op","razon_social","estado","municipio","status"];
+      const cols = ["pl","op","razon_social","estado","municipio","status","updated_at"];
       const esc = (v)=> `"${String(v ?? "").replaceAll('"','""')}"`;
       const header = cols.join(",");
       const lines = rows.map(r => cols.map(c=>esc(r[c])).join(","));
@@ -812,12 +902,11 @@
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
 
-      let tag = "todos";
-      if(activeOp === "DONE") tag = "cumplidas";
-      else if(activeOp !== "ALL") tag = activeOp.toLowerCase();
-
-      const pend = (!isDoneTab() && onlyPending) ? "_pendientes" : "";
-      const filename = `calibraciones7_${tag}${pend}.csv`;
+      let scope = "todos";
+      if(activeView === "DONE") scope = "cumplidas";
+      if(activeView === "OP") scope = activeOp.toLowerCase();
+      const pend = (onlyPending && activeView !== "DONE") ? "_pendientes" : "";
+      const filename = `calibraciones7_${scope}${pend}.csv`;
 
       const a = document.createElement("a");
       a.href = url;
@@ -828,13 +917,11 @@
       URL.revokeObjectURL(url);
     };
 
-    // Help
     document.getElementById("csvHelpBtn").onclick = ()=>{
       const el = document.getElementById("seedHelp");
       el.style.display = (el.style.display === "none") ? "block" : "none";
     };
 
-    // Events
     document.getElementById("refreshBtn").onclick = async ()=>{
       await ping();
       await loadPLs();
@@ -844,21 +931,8 @@
       render();
     });
 
-    // Pending toggle click (deshabilitado en Cumplidas desde render())
-    pendingToggle.onclick = ()=>{
-      if(isDoneTab()) return;
-      onlyPending = !onlyPending;
-      localStorage.setItem("cal7_only_pending", onlyPending ? "1" : "0");
-      syncPendingUI();
-      renderTabs();
-      render();
-    };
-
-    // Init
     await ping();
     await loadPLs();
-    renderTabs();
-    render();
   </script>
 </body>
 </html>
